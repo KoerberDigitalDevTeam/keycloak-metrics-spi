@@ -1,0 +1,63 @@
+version: 2
+jobs:
+  build:
+    working_directory: ~/project_root
+    
+    docker:
+      - image: circleci/openjdk:8-jdk-browsers
+
+    steps:
+      - checkout
+      - restore_cache:
+          key: jars-{{ checksum "build.gradle" }}
+      - run: 
+          name: Gradle build
+          command: ./gradlew build --no-daemon --max-workers 2 --build-cache
+      - save_cache:
+          paths:
+            - ~/.gradle
+          key: jars-{{ checksum "build.gradle"}}
+      - store_artifacts: # Want to keep this for other job that creates the Docker file
+          path: build/libs/
+          destination: artifact-file
+      - persist_to_workspace:
+          root: .
+          paths:
+            - build/*
+            
+  push-artifact:
+    working_directory: ~/build
+
+    docker:
+      - image: circleci/openjdk:8-jdk
+      
+    steps:
+      - attach_workspace:
+          at: .
+        
+      - run:
+          name: Install jFrog CLI
+          command: curl -fL https://getcli.jfrog.io | sh
+      - run:
+          name: Push to Artifactory
+          command: |
+                  ./jfrog rt config --url $ARTIFACTORY_URL --user $ARTIFACTORY_GRADLE_USER --password $ARTIFACTORY_GRADLE_PASSWORD --interactive=false
+                  ./jfrog rt u ~/build/build/*.jar gradle-dev-local --build-name=keycloak-metrics-spi --build-number=$CIRCLE_BUILD_NUM
+                  ./jfrog rt bce keycloak-metrics-spi $CIRCLE_BUILD_NUM  # collects all environment variables on the agent
+                  ./jfrog rt bp keycloak-metrics-spi $CIRCLE_BUILD_NUM  # attaches ^^ to the
+                 
+workflows:
+  version: 2
+  build-deploy:
+    jobs:
+      - build:
+          context: connyun
+
+      - push-artifact:
+          context: connyun
+          requires:
+            - build
+          filters:
+            branches:
+              only:
+                - develop
